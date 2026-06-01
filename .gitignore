@@ -1,0 +1,8 @@
+.env
+
+# binary hasil compile Go
+cmd/api/api
+dist/
+
+# data Docker lokal
+postgres_data/
