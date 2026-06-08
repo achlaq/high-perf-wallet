@@ -65,3 +65,37 @@ func (r *walletRepository) GetByID(ctx context.Context, id int64) (*domain.Accou
 	}
 	return acc, nil
 }
+
+func (r *walletRepository) CreateTransfer(ctx context.Context, tx any, transfer *domain.Transfer) error {
+	query := "INSERT INTO transfers (from_account_id, to_account_id, amount) VALUES ($1, $2, $3) RETURNING id, created_at"
+	currentTx := tx.(pgx.Tx)
+
+	err := currentTx.QueryRow(ctx, query, transfer.FromAccountID, transfer.ToAccountID, transfer.Amount).Scan(&transfer.ID, &transfer.CreatedAt)
+	return err
+}
+
+func (r *walletRepository) GetTransfersByAccountID(ctx context.Context, accountID int64) ([]*domain.Transfer, error) {
+	query := "SELECT id, from_account_id, to_account_id, amount, created_at FROM transfers WHERE from_account_id = $1 OR to_account_id = $1 ORDER BY created_at DESC"
+
+	rows, err := r.db.Query(ctx, query, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var transfers []*domain.Transfer
+	for rows.Next() {
+		t := &domain.Transfer{}
+		err := rows.Scan(&t.ID, &t.FromAccountID, &t.ToAccountID, &t.Amount, &t.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		transfers = append(transfers, t)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return transfers, nil
+}

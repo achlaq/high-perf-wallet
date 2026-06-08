@@ -76,6 +76,23 @@ func main() {
 		c.JSON(http.StatusOK, acc)
 	})
 
+	r.GET("/api/v1/wallets/:id/transfers", func(c *gin.Context) {
+		idStr := c.Param("id")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_id"})
+			return
+		}
+
+		transfers, err := walletUC.GetTransfers(c.Request.Context(), id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, transfers)
+	})
+
 	logger.Log.Info("Engine running on port :8080")
 	r.Run(":8080")
 }

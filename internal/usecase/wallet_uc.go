@@ -16,3 +16,7 @@ func NewWalletUsecase(repo domain.WalletRepository) domain.WalletUsecase {
 func (u *walletUsecase) GetByID(ctx context.Context, id int64) (*domain.Account, error) {
 	return u.repo.GetByID(ctx, id)
 }
+
+func (u *walletUsecase) GetTransfers(ctx context.Context, accountID int64) ([]*domain.Transfer, error) {
+	return u.repo.GetTransfersByAccountID(ctx, accountID)
+}

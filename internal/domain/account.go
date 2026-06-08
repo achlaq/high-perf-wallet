@@ -1,6 +1,9 @@
 package domain
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type Account struct {
 	ID      int64  `json:"id"`
@@ -8,11 +11,21 @@ type Account struct {
 	Balance int64  `json:"balance"`
 }
 
+type Transfer struct {
+	ID            int64     `json:"id"`
+	FromAccountID int64     `json:"from_account_id"`
+	ToAccountID   int64     `json:"to_account_id"`
+	Amount        int64     `json:"amount"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
 type WalletRepository interface {
 	GetByID(ctx context.Context, id int64) (*Account, error)
 	// Ambil data dengan Row-Level Locking untuk mencegah data balapan
 	GetByIDForUpdate(ctx context.Context, tx any, id int64) (*Account, error)
 	UpdateBalance(ctx context.Context, tx any, id int64, newBalance int64) error
+	CreateTransfer(ctx context.Context, tx any, transfer *Transfer) error
+	GetTransfersByAccountID(ctx context.Context, accountID int64) ([]*Transfer, error)
 
 	// Tx Manager helper
 	BeginTx(ctx context.Context) (any, error)
@@ -22,6 +35,7 @@ type WalletRepository interface {
 
 type WalletUsecase interface {
 	GetByID(ctx context.Context, id int64) (*Account, error)
+	GetTransfers(ctx context.Context, accountID int64) ([]*Transfer, error)
 }
 
 type TransferUsecase interface {

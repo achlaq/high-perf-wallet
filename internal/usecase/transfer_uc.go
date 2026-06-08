@@ -78,6 +78,17 @@ func (u *transferUsecase) ExecuteTransfer(ctx context.Context, idempotencyKey st
 		return err
 	}
 
+	// 4.5 Catat Histori Transfer
+	transfer := &domain.Transfer{
+		FromAccountID: fromID,
+		ToAccountID:   toID,
+		Amount:        amount,
+	}
+	err = u.repo.CreateTransfer(ctx, tx, transfer)
+	if err != nil {
+		return err
+	}
+
 	// 5. Commit Transaksi jika semua sukses
 	if err := u.repo.CommitTx(ctx, tx); err != nil {
 		return err
