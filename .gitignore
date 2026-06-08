@@ -1,5 +1,7 @@
 .env
 
+.idea
+
 # binary hasil compile Go
 cmd/api/api
 dist/
