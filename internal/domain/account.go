@@ -9,6 +9,7 @@ type Account struct {
 }
 
 type WalletRepository interface {
+	GetByID(ctx context.Context, id int64) (*Account, error)
 	// Ambil data dengan Row-Level Locking untuk mencegah data balapan
 	GetByIDForUpdate(ctx context.Context, tx any, id int64) (*Account, error)
 	UpdateBalance(ctx context.Context, tx any, id int64, newBalance int64) error
@@ -17,6 +18,10 @@ type WalletRepository interface {
 	BeginTx(ctx context.Context) (any, error)
 	CommitTx(ctx context.Context, tx any) error
 	RollbackTx(ctx context.Context, tx any) error
+}
+
+type WalletUsecase interface {
+	GetByID(ctx context.Context, id int64) (*Account, error)
 }
 
 type TransferUsecase interface {

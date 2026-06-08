@@ -10,6 +10,7 @@ import (
 	"high-perf-wallet/pkg/logger"
 	"net/http"
 	"os"
+	"strconv"
 )
 
 func main() {
@@ -30,6 +31,7 @@ func main() {
 
 	walletRepo := postgres.NewWalletRepository(dbPool)
 	transferUC := usecase.NewTransferUsecase(walletRepo)
+	walletUC := usecase.NewWalletUsecase(walletRepo)
 
 	r := gin.New()
 	r.Use(gin.Recovery()) // Mencegah server mati jika panic
@@ -55,6 +57,23 @@ func main() {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"status": "success", "message": "funds_transferred_successfully"})
+	})
+
+	r.GET("/api/v1/wallets/:id", func(c *gin.Context) {
+		idStr := c.Param("id")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_id"})
+			return
+		}
+
+		acc, err := walletUC.GetByID(c.Request.Context(), id)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, acc)
 	})
 
 	logger.Log.Info("Engine running on port :8080")

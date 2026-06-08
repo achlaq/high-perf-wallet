@@ -51,3 +51,17 @@ func (r *walletRepository) UpdateBalance(ctx context.Context, tx any, id int64, 
 	_, err := currentTx.Exec(ctx, query, newBalance, id)
 	return err
 }
+
+func (r *walletRepository) GetByID(ctx context.Context, id int64) (*domain.Account, error) {
+	query := "SELECT id, name, balance FROM accounts WHERE id = $1"
+	acc := &domain.Account{}
+
+	err := r.db.QueryRow(ctx, query, id).Scan(&acc.ID, &acc.Name, &acc.Balance)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errors.New("account_not_found")
+		}
+		return nil, err
+	}
+	return acc, nil
+}
