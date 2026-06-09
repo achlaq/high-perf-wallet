@@ -4,13 +4,17 @@ import (
 	"context"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
+	"high-perf-wallet/internal/domain"
 	"high-perf-wallet/internal/repository/postgres"
+	redisRepo "high-perf-wallet/internal/repository/redis"
 	"high-perf-wallet/internal/usecase"
 	"high-perf-wallet/pkg/logger"
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 )
 
 func main() {
@@ -29,7 +33,20 @@ func main() {
 	}
 	defer dbPool.Close()
 
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+	rdb := redis.NewClient(&redis.Options{
+		Addr: redisAddr,
+	})
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		logger.Log.Fatal("Koneksi Redis gagal", zap.Error(err))
+	}
+	defer rdb.Close()
+
 	walletRepo := postgres.NewWalletRepository(dbPool)
+	idempotencyRepo := redisRepo.NewIdempotencyRepository(rdb)
 	transferUC := usecase.NewTransferUsecase(walletRepo)
 	walletUC := usecase.NewWalletUsecase(walletRepo)
 
@@ -50,13 +67,55 @@ func main() {
 			return
 		}
 
-		err := transferUC.ExecuteTransfer(c.Request.Context(), idempotencyKey, req.FromAccountID, req.ToAccountID, req.Amount)
-		if err != nil {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
-			return
+		if idempotencyKey != "" {
+			cached, err := idempotencyRepo.Get(c.Request.Context(), idempotencyKey)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "idempotency_check_failed"})
+				return
+			}
+			if cached != nil {
+				if cached.Status == "started" {
+					c.JSON(http.StatusConflict, gin.H{"error": "request_in_progress"})
+					return
+				}
+				c.Data(cached.ResponseCode, "application/json; charset=utf-8", []byte(cached.ResponseBody))
+				return
+			}
+
+			err = idempotencyRepo.Set(c.Request.Context(), idempotencyKey, &domain.Idempotency{
+				Status: "started",
+			}, 24*time.Hour)
+			if err != nil {
+				if err.Error() == "key_already_exists" {
+					c.JSON(http.StatusConflict, gin.H{"error": "request_in_progress"})
+					return
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "idempotency_lock_failed"})
+				return
+			}
 		}
 
-		c.JSON(http.StatusOK, gin.H{"status": "success", "message": "funds_transferred_successfully"})
+		err := transferUC.ExecuteTransfer(c.Request.Context(), idempotencyKey, req.FromAccountID, req.ToAccountID, req.Amount)
+
+		var respCode int
+		var respBody []byte
+		if err != nil {
+			respCode = http.StatusUnprocessableEntity
+			respBody = []byte(`{"error":"` + err.Error() + `"}`)
+		} else {
+			respCode = http.StatusOK
+			respBody = []byte(`{"status":"success","message":"funds_transferred_successfully"}`)
+		}
+
+		if idempotencyKey != "" {
+			_ = idempotencyRepo.Set(c.Request.Context(), idempotencyKey, &domain.Idempotency{
+				Status:       "completed",
+				ResponseCode: respCode,
+				ResponseBody: string(respBody),
+			}, 24*time.Hour)
+		}
+
+		c.Data(respCode, "application/json; charset=utf-8", respBody)
 	})
 
 	r.GET("/api/v1/wallets/:id", func(c *gin.Context) {

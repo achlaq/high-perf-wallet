@@ -41,3 +41,14 @@ type WalletUsecase interface {
 type TransferUsecase interface {
 	ExecuteTransfer(ctx context.Context, idempotencyKey string, fromID, toID int64, amount int64) error
 }
+
+type Idempotency struct {
+	Status       string `json:"status"`
+	ResponseCode int    `json:"response_code"`
+	ResponseBody string `json:"response_body"`
+}
+
+type IdempotencyRepository interface {
+	Get(ctx context.Context, key string) (*Idempotency, error)
+	Set(ctx context.Context, key string, val *Idempotency, ttl time.Duration) error
+}
