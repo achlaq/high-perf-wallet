@@ -33,6 +33,11 @@ func main() {
 	}
 	defer dbPool.Close()
 
+	// Jalankan database migrations sebelum server melayani request
+	if err := postgres.RunMigrations(ctx, dbPool); err != nil {
+		logger.Log.Fatal("Database migrations gagal", zap.Error(err))
+	}
+
 	redisAddr := os.Getenv("REDIS_ADDR")
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
