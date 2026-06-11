@@ -2,18 +2,21 @@ package main
 
 import (
 	"context"
+	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
-	"high-perf-wallet/internal/domain"
+	"high-perf-wallet/internal/config"
+	v1 "high-perf-wallet/internal/delivery/http/v1"
 	"high-perf-wallet/internal/repository/postgres"
 	redisRepo "high-perf-wallet/internal/repository/redis"
 	"high-perf-wallet/internal/usecase"
 	"high-perf-wallet/pkg/logger"
 	"net/http"
 	"os"
-	"strconv"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
@@ -21,142 +24,82 @@ func main() {
 	logger.InitLogger()
 	defer logger.Log.Sync()
 
-	ctx := context.Background()
-	dbURI := os.Getenv("DATABASE_URL")
-	if dbURI == "" {
-		dbURI = "postgres://postgres:secretpassword@localhost:5432/wallet_db?sslmode=disable"
-	}
+	// 1. Load Config terpusat
+	cfg := config.LoadConfig()
+	logger.Log.Info("Configuration loaded successfully",
+		zap.String("port", cfg.Port),
+		zap.String("redis_addr", cfg.RedisAddr),
+	)
 
-	dbPool, err := pgxpool.New(ctx, dbURI)
+	ctx := context.Background()
+
+	// 2. Inisialisasi Database PostgreSQL
+	dbPool, err := pgxpool.New(ctx, cfg.DatabaseURL)
 	if err != nil {
 		logger.Log.Fatal("Koneksi DB gagal", zap.Error(err))
 	}
-	defer dbPool.Close()
 
-	// Jalankan database migrations sebelum server melayani request
+	// 3. Jalankan Database Migrations otomatis
 	if err := postgres.RunMigrations(ctx, dbPool); err != nil {
 		logger.Log.Fatal("Database migrations gagal", zap.Error(err))
 	}
 
-	redisAddr := os.Getenv("REDIS_ADDR")
-	if redisAddr == "" {
-		redisAddr = "localhost:6379"
-	}
+	// 4. Inisialisasi Redis Client
 	rdb := redis.NewClient(&redis.Options{
-		Addr: redisAddr,
+		Addr: cfg.RedisAddr,
 	})
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		logger.Log.Fatal("Koneksi Redis gagal", zap.Error(err))
 	}
-	defer rdb.Close()
 
+	// 5. Inisialisasi Repositories & Usecases (Dependency Injection)
 	walletRepo := postgres.NewWalletRepository(dbPool)
 	idempotencyRepo := redisRepo.NewIdempotencyRepository(rdb)
 	transferUC := usecase.NewTransferUsecase(walletRepo)
 	walletUC := usecase.NewWalletUsecase(walletRepo)
 
+	// 6. Inisialisasi HTTP Handler & Router
 	r := gin.New()
-	r.Use(gin.Recovery()) // Mencegah server mati jika panic
+	r.Use(gin.Recovery()) // Mencegah server mati jika terjadi panic
 
-	r.POST("/api/v1/wallets/transfer", func(c *gin.Context) {
-		var req struct {
-			FromAccountID int64 `json:"from_account_id" binding:"required"`
-			ToAccountID   int64 `json:"to_account_id" binding:"required"`
-			Amount        int64 `json:"amount" binding:"required"`
+	walletHandler := v1.NewWalletHandler(transferUC, walletUC, idempotencyRepo)
+	v1.MapRoutes(r, walletHandler)
+
+	// 7. Setup HTTP Server untuk Asynchronous Running (Graceful Shutdown)
+	srv := &http.Server{
+		Addr:    cfg.Port,
+		Handler: r,
+	}
+
+	// Jalankan server di goroutine terpisah agar main thread tidak terblok
+	go func() {
+		logger.Log.Info("Engine running", zap.String("port", cfg.Port))
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Log.Fatal("ListenAndServe failed", zap.Error(err))
 		}
+	}()
 
-		idempotencyKey := c.GetHeader("X-Idempotency-Key")
+	// 8. Graceful Shutdown: Tunggu sinyal sistem operasi untuk mematikan server
+	quit := make(chan os.Signal, 1)
+	// Listen sinyal interupsi (Ctrl+C / SIGINT) atau kill command (SIGTERM)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit // Blok main thread sampai ada sinyal masuk
 
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request"})
-			return
-		}
+	logger.Log.Warn("Shutting down server...")
 
-		if idempotencyKey != "" {
-			cached, err := idempotencyRepo.Get(c.Request.Context(), idempotencyKey)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "idempotency_check_failed"})
-				return
-			}
-			if cached != nil {
-				if cached.Status == "started" {
-					c.JSON(http.StatusConflict, gin.H{"error": "request_in_progress"})
-					return
-				}
-				c.Data(cached.ResponseCode, "application/json; charset=utf-8", []byte(cached.ResponseBody))
-				return
-			}
+	// Buat context dengan batas waktu timeout dari config
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ShutdownTimeout)*time.Second)
+	defer cancel()
 
-			err = idempotencyRepo.Set(c.Request.Context(), idempotencyKey, &domain.Idempotency{
-				Status: "started",
-			}, 24*time.Hour)
-			if err != nil {
-				if err.Error() == "key_already_exists" {
-					c.JSON(http.StatusConflict, gin.H{"error": "request_in_progress"})
-					return
-				}
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "idempotency_lock_failed"})
-				return
-			}
-		}
+	// Stop menerima request HTTP baru, tunggu yang sedang jalan selesai
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Log.Error("Server forced to shutdown", zap.Error(err))
+	}
 
-		err := transferUC.ExecuteTransfer(c.Request.Context(), idempotencyKey, req.FromAccountID, req.ToAccountID, req.Amount)
+	// Tutup koneksi resources secara aman
+	logger.Log.Warn("Closing database and cache connections...")
+	dbPool.Close()
+	_ = rdb.Close()
 
-		var respCode int
-		var respBody []byte
-		if err != nil {
-			respCode = http.StatusUnprocessableEntity
-			respBody = []byte(`{"error":"` + err.Error() + `"}`)
-		} else {
-			respCode = http.StatusOK
-			respBody = []byte(`{"status":"success","message":"funds_transferred_successfully"}`)
-		}
-
-		if idempotencyKey != "" {
-			_ = idempotencyRepo.Set(c.Request.Context(), idempotencyKey, &domain.Idempotency{
-				Status:       "completed",
-				ResponseCode: respCode,
-				ResponseBody: string(respBody),
-			}, 24*time.Hour)
-		}
-
-		c.Data(respCode, "application/json; charset=utf-8", respBody)
-	})
-
-	r.GET("/api/v1/wallets/:id", func(c *gin.Context) {
-		idStr := c.Param("id")
-		id, err := strconv.ParseInt(idStr, 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_id"})
-			return
-		}
-
-		acc, err := walletUC.GetByID(c.Request.Context(), id)
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-			return
-		}
-
-		c.JSON(http.StatusOK, acc)
-	})
-
-	r.GET("/api/v1/wallets/:id/transfers", func(c *gin.Context) {
-		idStr := c.Param("id")
-		id, err := strconv.ParseInt(idStr, 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_id"})
-			return
-		}
-
-		transfers, err := walletUC.GetTransfers(c.Request.Context(), id)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-
-		c.JSON(http.StatusOK, transfers)
-	})
-
-	logger.Log.Info("Engine running on port :8080")
-	r.Run(":8080")
+	logger.Log.Info("Server exited gracefully")
 }
