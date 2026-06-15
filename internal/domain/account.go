@@ -2,7 +2,12 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"time"
+)
+
+var (
+	ErrAccountNotFound = errors.New("account_not_found")
 )
 
 type Account struct {

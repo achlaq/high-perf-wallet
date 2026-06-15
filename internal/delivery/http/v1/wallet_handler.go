@@ -1,8 +1,10 @@
 package v1
 
 import (
+	"errors"
 	"github.com/gin-gonic/gin"
 	"high-perf-wallet/internal/domain"
+	"high-perf-wallet/pkg/apperror"
 	"net/http"
 	"strconv"
 	"time"
@@ -22,6 +24,39 @@ func NewWalletHandler(transferUC domain.TransferUsecase, walletUC domain.WalletU
 	}
 }
 
+// handleError maps an AppError to correct HTTP status codes and formatted responses
+func handleError(c *gin.Context, err error) {
+	var appErr *apperror.AppError
+	if errors.As(err, &appErr) {
+		var status int
+		switch appErr.Type {
+		case apperror.TypeValidation:
+			status = http.StatusBadRequest
+		case apperror.TypeNotFound:
+			status = http.StatusNotFound
+		case apperror.TypeConflict:
+			status = http.StatusConflict
+		default:
+			status = http.StatusInternalServerError
+		}
+		c.JSON(status, gin.H{
+			"error": gin.H{
+				"code":    appErr.Code,
+				"message": appErr.Message,
+			},
+		})
+		return
+	}
+
+	// Fallback for non-AppError
+	c.JSON(http.StatusInternalServerError, gin.H{
+		"error": gin.H{
+			"code":    "INTERNAL_SERVER_ERROR",
+			"message": "An unexpected error occurred",
+		},
+	})
+}
+
 func (h *WalletHandler) Transfer(c *gin.Context) {
 	var req struct {
 		FromAccountID int64 `json:"from_account_id" binding:"required"`
@@ -32,19 +67,19 @@ func (h *WalletHandler) Transfer(c *gin.Context) {
 	idempotencyKey := c.GetHeader("X-Idempotency-Key")
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request"})
+		handleError(c, apperror.NewValidationError("BAD_REQUEST", "Invalid request body or missing fields"))
 		return
 	}
 
 	if idempotencyKey != "" {
 		cached, err := h.idempotencyRepo.Get(c.Request.Context(), idempotencyKey)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "idempotency_check_failed"})
+			handleError(c, apperror.NewInternalError("IDEMPOTENCY_ERROR", "Failed to check idempotency status", err))
 			return
 		}
 		if cached != nil {
 			if cached.Status == "started" {
-				c.JSON(http.StatusConflict, gin.H{"error": "request_in_progress"})
+				handleError(c, apperror.NewConflictError("REQUEST_IN_PROGRESS", "A transaction with this idempotency key is already in progress"))
 				return
 			}
 			c.Data(cached.ResponseCode, "application/json; charset=utf-8", []byte(cached.ResponseBody))
@@ -56,10 +91,10 @@ func (h *WalletHandler) Transfer(c *gin.Context) {
 		}, 24*time.Hour)
 		if err != nil {
 			if err.Error() == "key_already_exists" {
-				c.JSON(http.StatusConflict, gin.H{"error": "request_in_progress"})
+				handleError(c, apperror.NewConflictError("REQUEST_IN_PROGRESS", "A transaction with this idempotency key is already in progress"))
 				return
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "idempotency_lock_failed"})
+			handleError(c, apperror.NewInternalError("IDEMPOTENCY_ERROR", "Failed to establish transaction lock", err))
 			return
 		}
 	}
@@ -69,8 +104,23 @@ func (h *WalletHandler) Transfer(c *gin.Context) {
 	var respCode int
 	var respBody []byte
 	if err != nil {
-		respCode = http.StatusUnprocessableEntity
-		respBody = []byte(`{"error":"` + err.Error() + `"}`)
+		var appErr *apperror.AppError
+		if errors.As(err, &appErr) {
+			switch appErr.Type {
+			case apperror.TypeValidation:
+				respCode = http.StatusBadRequest
+			case apperror.TypeNotFound:
+				respCode = http.StatusNotFound
+			case apperror.TypeConflict:
+				respCode = http.StatusConflict
+			default:
+				respCode = http.StatusInternalServerError
+			}
+			respBody = []byte(`{"error":{"code":"` + appErr.Code + `","message":"` + appErr.Message + `"}}`)
+		} else {
+			respCode = http.StatusInternalServerError
+			respBody = []byte(`{"error":{"code":"INTERNAL_SERVER_ERROR","message":"An unexpected error occurred"}}`)
+		}
 	} else {
 		respCode = http.StatusOK
 		respBody = []byte(`{"status":"success","message":"funds_transferred_successfully"}`)
@@ -91,13 +141,13 @@ func (h *WalletHandler) GetByID(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_id"})
+		handleError(c, apperror.NewValidationError("INVALID_ID", "The account ID must be a valid number"))
 		return
 	}
 
 	acc, err := h.walletUC.GetByID(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		handleError(c, err)
 		return
 	}
 
@@ -108,13 +158,13 @@ func (h *WalletHandler) GetTransfers(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_id"})
+		handleError(c, apperror.NewValidationError("INVALID_ID", "The account ID must be a valid number"))
 		return
 	}
 
 	transfers, err := h.walletUC.GetTransfers(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleError(c, err)
 		return
 	}
 
