@@ -162,11 +162,39 @@ func (h *WalletHandler) GetTransfers(c *gin.Context) {
 		return
 	}
 
-	transfers, err := h.walletUC.GetTransfers(c.Request.Context(), id)
+	// Set default values for pagination
+	limit := 10
+	offset := 0
+
+	// Parse limit query parameter
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if val, err := strconv.Atoi(limitStr); err == nil && val > 0 {
+			limit = val
+		} else if err != nil {
+			handleError(c, apperror.NewValidationError("INVALID_LIMIT", "The limit parameter must be a positive number"))
+			return
+		}
+	}
+	// Clamp limit to a maximum of 100 to protect server resources
+	if limit > 100 {
+		limit = 100
+	}
+
+	// Parse offset query parameter
+	if offsetStr := c.Query("offset"); offsetStr != "" {
+		if val, err := strconv.Atoi(offsetStr); err == nil && val >= 0 {
+			offset = val
+		} else if err != nil {
+			handleError(c, apperror.NewValidationError("INVALID_OFFSET", "The offset parameter must be a non-negative number"))
+			return
+		}
+	}
+
+	paginatedTransfers, err := h.walletUC.GetTransfers(c.Request.Context(), id, limit, offset)
 	if err != nil {
 		handleError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, transfers)
+	c.JSON(http.StatusOK, paginatedTransfers)
 }

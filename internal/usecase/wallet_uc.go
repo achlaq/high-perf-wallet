@@ -27,10 +27,16 @@ func (u *walletUsecase) GetByID(ctx context.Context, id int64) (*domain.Account,
 	return acc, nil
 }
 
-func (u *walletUsecase) GetTransfers(ctx context.Context, accountID int64) ([]*domain.Transfer, error) {
-	transfers, err := u.repo.GetTransfersByAccountID(ctx, accountID)
+func (u *walletUsecase) GetTransfers(ctx context.Context, accountID int64, limit, offset int) (*domain.PaginatedTransfers, error) {
+	transfers, totalCount, err := u.repo.GetTransfersByAccountID(ctx, accountID, limit, offset)
 	if err != nil {
 		return nil, apperror.NewInternalError("DATABASE_ERROR", "Failed to retrieve transfer history", err)
 	}
-	return transfers, nil
+
+	return &domain.PaginatedTransfers{
+		Transfers:  transfers,
+		TotalCount: totalCount,
+		Limit:      limit,
+		Offset:     offset,
+	}, nil
 }

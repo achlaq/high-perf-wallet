@@ -74,12 +74,25 @@ func (r *walletRepository) CreateTransfer(ctx context.Context, tx any, transfer 
 	return err
 }
 
-func (r *walletRepository) GetTransfersByAccountID(ctx context.Context, accountID int64) ([]*domain.Transfer, error) {
-	query := "SELECT id, from_account_id, to_account_id, amount, created_at FROM transfers WHERE from_account_id = $1 OR to_account_id = $1 ORDER BY created_at DESC"
-
-	rows, err := r.db.Query(ctx, query, accountID)
+func (r *walletRepository) GetTransfersByAccountID(ctx context.Context, accountID int64, limit, offset int) ([]*domain.Transfer, int64, error) {
+	// 1. Get total count of transfers for this account
+	countQuery := "SELECT COUNT(*) FROM transfers WHERE from_account_id = $1 OR to_account_id = $1"
+	var totalCount int64
+	err := r.db.QueryRow(ctx, countQuery, accountID).Scan(&totalCount)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+
+	// 2. Get paginated transfers list
+	query := `SELECT id, from_account_id, to_account_id, amount, created_at 
+	          FROM transfers 
+	          WHERE from_account_id = $1 OR to_account_id = $1 
+	          ORDER BY created_at DESC 
+	          LIMIT $2 OFFSET $3`
+
+	rows, err := r.db.Query(ctx, query, accountID, limit, offset)
+	if err != nil {
+		return nil, 0, err
 	}
 	defer rows.Close()
 
@@ -88,14 +101,14 @@ func (r *walletRepository) GetTransfersByAccountID(ctx context.Context, accountI
 		t := &domain.Transfer{}
 		err := rows.Scan(&t.ID, &t.FromAccountID, &t.ToAccountID, &t.Amount, &t.CreatedAt)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		transfers = append(transfers, t)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return transfers, nil
+	return transfers, totalCount, nil
 }
