@@ -1,9 +1,11 @@
 package middleware
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"github.com/gin-gonic/gin"
+	"high-perf-wallet/pkg/logger"
 )
 
 func RequestID() gin.HandlerFunc {
@@ -17,7 +19,11 @@ func RequestID() gin.HandlerFunc {
 			reqID = fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 		}
 
-		// Simpan request ID di context Gin untuk diakses oleh logger
+		// Simpan request ID di context Go standard agar terpropagasi ke usecase & repository
+		ctx := context.WithValue(c.Request.Context(), logger.RequestIDKey, reqID)
+		c.Request = c.Request.WithContext(ctx)
+
+		// Simpan juga di Gin context untuk kompatibilitas jika dibutuhkan
 		c.Set("RequestID", reqID)
 
 		// Set header X-Request-ID di HTTP Response

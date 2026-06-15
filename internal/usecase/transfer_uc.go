@@ -29,7 +29,7 @@ func (u *transferUsecase) ExecuteTransfer(ctx context.Context, idempotencyKey st
 	// 1. Memulai Transaksi Database
 	tx, err := u.repo.BeginTx(ctx)
 	if err != nil {
-		logger.Log.Error("Gagal memulai transaksi", zap.Error(err))
+		logger.WithCtx(ctx).Error("Gagal memulai transaksi", zap.Error(err))
 		return apperror.NewInternalError("TRANSACTION_ERROR", "Failed to start database transaction", err)
 	}
 
@@ -102,7 +102,7 @@ func (u *transferUsecase) ExecuteTransfer(ctx context.Context, idempotencyKey st
 		return apperror.NewInternalError("TRANSACTION_ERROR", "Failed to commit database transaction", err)
 	}
 
-	logger.Log.Info("Transfer Sukses",
+	logger.WithCtx(ctx).Info("Transfer Sukses",
 		zap.Int64("from", fromID),
 		zap.Int64("to", toID),
 		zap.Int64("amount", amount),
