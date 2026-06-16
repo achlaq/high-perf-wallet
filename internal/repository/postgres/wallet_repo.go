@@ -29,12 +29,12 @@ func (r *walletRepository) RollbackTx(ctx context.Context, tx any) error {
 }
 
 func (r *walletRepository) GetByIDForUpdate(ctx context.Context, tx any, id int64) (*domain.Account, error) {
-	query := "SELECT id, name, balance FROM accounts WHERE id = $1 FOR UPDATE"
+	query := "SELECT id, name, balance, currency FROM accounts WHERE id = $1 FOR UPDATE"
 
 	currentTx := tx.(pgx.Tx)
 	acc := &domain.Account{}
 
-	err := currentTx.QueryRow(ctx, query, id).Scan(&acc.ID, &acc.Name, &acc.Balance)
+	err := currentTx.QueryRow(ctx, query, id).Scan(&acc.ID, &acc.Name, &acc.Balance, &acc.Currency)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrAccountNotFound
@@ -53,10 +53,10 @@ func (r *walletRepository) UpdateBalance(ctx context.Context, tx any, id int64, 
 }
 
 func (r *walletRepository) GetByID(ctx context.Context, id int64) (*domain.Account, error) {
-	query := "SELECT id, name, balance FROM accounts WHERE id = $1"
+	query := "SELECT id, name, balance, currency FROM accounts WHERE id = $1"
 	acc := &domain.Account{}
 
-	err := r.db.QueryRow(ctx, query, id).Scan(&acc.ID, &acc.Name, &acc.Balance)
+	err := r.db.QueryRow(ctx, query, id).Scan(&acc.ID, &acc.Name, &acc.Balance, &acc.Currency)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrAccountNotFound
@@ -67,10 +67,19 @@ func (r *walletRepository) GetByID(ctx context.Context, id int64) (*domain.Accou
 }
 
 func (r *walletRepository) CreateTransfer(ctx context.Context, tx any, transfer *domain.Transfer) error {
-	query := "INSERT INTO transfers (from_account_id, to_account_id, amount) VALUES ($1, $2, $3) RETURNING id, created_at"
+	query := `INSERT INTO transfers (from_account_id, to_account_id, source_currency, target_currency, source_amount, target_amount, exchange_rate) 
+	          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at`
 	currentTx := tx.(pgx.Tx)
 
-	err := currentTx.QueryRow(ctx, query, transfer.FromAccountID, transfer.ToAccountID, transfer.Amount).Scan(&transfer.ID, &transfer.CreatedAt)
+	err := currentTx.QueryRow(ctx, query, 
+		transfer.FromAccountID, 
+		transfer.ToAccountID, 
+		transfer.SourceCurrency, 
+		transfer.TargetCurrency, 
+		transfer.SourceAmount, 
+		transfer.TargetAmount, 
+		transfer.ExchangeRate,
+	).Scan(&transfer.ID, &transfer.CreatedAt)
 	return err
 }
 
@@ -84,7 +93,7 @@ func (r *walletRepository) GetTransfersByAccountID(ctx context.Context, accountI
 	}
 
 	// 2. Get paginated transfers list
-	query := `SELECT id, from_account_id, to_account_id, amount, created_at 
+	query := `SELECT id, from_account_id, to_account_id, source_currency, target_currency, source_amount, target_amount, exchange_rate, created_at 
 	          FROM transfers 
 	          WHERE from_account_id = $1 OR to_account_id = $1 
 	          ORDER BY created_at DESC 
@@ -99,7 +108,17 @@ func (r *walletRepository) GetTransfersByAccountID(ctx context.Context, accountI
 	var transfers []*domain.Transfer
 	for rows.Next() {
 		t := &domain.Transfer{}
-		err := rows.Scan(&t.ID, &t.FromAccountID, &t.ToAccountID, &t.Amount, &t.CreatedAt)
+		err := rows.Scan(
+			&t.ID, 
+			&t.FromAccountID, 
+			&t.ToAccountID, 
+			&t.SourceCurrency, 
+			&t.TargetCurrency, 
+			&t.SourceAmount, 
+			&t.TargetAmount, 
+			&t.ExchangeRate, 
+			&t.CreatedAt,
+		)
 		if err != nil {
 			return nil, 0, err
 		}

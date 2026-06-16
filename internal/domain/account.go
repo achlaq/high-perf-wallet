@@ -11,17 +11,22 @@ var (
 )
 
 type Account struct {
-	ID      int64  `json:"id"`
-	Name    string `json:"name"`
-	Balance int64  `json:"balance"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Balance  int64  `json:"balance"`
+	Currency string `json:"currency"`
 }
 
 type Transfer struct {
-	ID            int64     `json:"id"`
-	FromAccountID int64     `json:"from_account_id"`
-	ToAccountID   int64     `json:"to_account_id"`
-	Amount        int64     `json:"amount"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID             int64     `json:"id"`
+	FromAccountID  int64     `json:"from_account_id"`
+	ToAccountID    int64     `json:"to_account_id"`
+	SourceCurrency string    `json:"source_currency"`
+	TargetCurrency string    `json:"target_currency"`
+	SourceAmount   int64     `json:"source_amount"`
+	TargetAmount   int64     `json:"target_amount"`
+	ExchangeRate   float64   `json:"exchange_rate"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 type PaginatedTransfers struct {
@@ -29,6 +34,10 @@ type PaginatedTransfers struct {
 	TotalCount int64       `json:"total_count"`
 	Limit      int         `json:"limit"`
 	Offset     int         `json:"offset"`
+}
+
+type ExchangeRateService interface {
+	GetRate(ctx context.Context, fromCurrency, toCurrency string) (float64, error)
 }
 
 type WalletRepository interface {
@@ -51,7 +60,7 @@ type WalletUsecase interface {
 }
 
 type TransferUsecase interface {
-	ExecuteTransfer(ctx context.Context, idempotencyKey string, fromID, toID int64, amount int64) error
+	ExecuteTransfer(ctx context.Context, idempotencyKey string, fromID, toID int64, amount int64) (*Transfer, error)
 }
 
 type Idempotency struct {

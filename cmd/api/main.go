@@ -52,10 +52,11 @@ func main() {
 		logger.Log.Fatal("Koneksi Redis gagal", zap.Error(err))
 	}
 
-	// 5. Inisialisasi Repositories & Usecases (Dependency Injection)
+		// 5. Inisialisasi Repositories & Usecases (Dependency Injection)
 	walletRepo := postgres.NewWalletRepository(dbPool)
 	idempotencyRepo := redisRepo.NewIdempotencyRepository(rdb)
-	transferUC := usecase.NewTransferUsecase(walletRepo)
+	fxService := redisRepo.NewExchangeRateService(rdb)
+	transferUC := usecase.NewTransferUsecase(walletRepo, fxService)
 	walletUC := usecase.NewWalletUsecase(walletRepo)
 
 	// 6. Inisialisasi HTTP Handler & Router

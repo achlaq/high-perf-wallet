@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"encoding/json"
 	"errors"
 	"github.com/gin-gonic/gin"
 	"high-perf-wallet/internal/domain"
@@ -99,7 +100,7 @@ func (h *WalletHandler) Transfer(c *gin.Context) {
 		}
 	}
 
-	err := h.transferUC.ExecuteTransfer(c.Request.Context(), idempotencyKey, req.FromAccountID, req.ToAccountID, req.Amount)
+	transfer, err := h.transferUC.ExecuteTransfer(c.Request.Context(), idempotencyKey, req.FromAccountID, req.ToAccountID, req.Amount)
 
 	var respCode int
 	var respBody []byte
@@ -123,7 +124,16 @@ func (h *WalletHandler) Transfer(c *gin.Context) {
 		}
 	} else {
 		respCode = http.StatusOK
-		respBody = []byte(`{"status":"success","message":"funds_transferred_successfully"}`)
+		respMap := gin.H{
+			"status":   "success",
+			"message":  "funds_transferred_successfully",
+			"transfer": transfer,
+		}
+		if body, jsonErr := json.Marshal(respMap); jsonErr == nil {
+			respBody = body
+		} else {
+			respBody = []byte(`{"status":"success","message":"funds_transferred_successfully"}`)
+		}
 	}
 
 	if idempotencyKey != "" {
