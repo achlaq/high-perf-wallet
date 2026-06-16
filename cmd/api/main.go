@@ -12,6 +12,7 @@ import (
 	"high-perf-wallet/internal/repository/postgres"
 	redisRepo "high-perf-wallet/internal/repository/redis"
 	"high-perf-wallet/internal/usecase"
+	"high-perf-wallet/internal/worker"
 	"high-perf-wallet/pkg/logger"
 	"net/http"
 	"os"
@@ -52,11 +53,16 @@ func main() {
 		logger.Log.Fatal("Koneksi Redis gagal", zap.Error(err))
 	}
 
-		// 5. Inisialisasi Repositories & Usecases (Dependency Injection)
+	// 5. Inisialisasi Background Audit Worker
+	auditWorker := worker.NewAuditWorker(100)
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	go auditWorker.Start(workerCtx)
+
+	// 6. Inisialisasi Repositories & Usecases (Dependency Injection)
 	walletRepo := postgres.NewWalletRepository(dbPool)
 	idempotencyRepo := redisRepo.NewIdempotencyRepository(rdb)
 	fxService := redisRepo.NewExchangeRateService(rdb)
-	transferUC := usecase.NewTransferUsecase(walletRepo, fxService)
+	transferUC := usecase.NewTransferUsecase(walletRepo, fxService, auditWorker)
 	walletUC := usecase.NewWalletUsecase(walletRepo)
 
 	// 6. Inisialisasi HTTP Handler & Router
@@ -96,6 +102,11 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Log.Error("Server forced to shutdown", zap.Error(err))
 	}
+
+	// Hentikan audit worker secara anggun
+	logger.Log.Warn("Shutting down audit worker...")
+	cancelWorker()
+	auditWorker.Close()
 
 	// Tutup koneksi resources secara aman
 	logger.Log.Warn("Closing database and cache connections...")

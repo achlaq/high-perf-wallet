@@ -11,12 +11,21 @@ import (
 )
 
 type transferUsecase struct {
-	repo   domain.WalletRepository
-	fxServ domain.ExchangeRateService
+	repo            domain.WalletRepository
+	fxServ          domain.ExchangeRateService
+	auditDispatcher domain.AuditDispatcher
 }
 
-func NewTransferUsecase(repo domain.WalletRepository, fxServ domain.ExchangeRateService) domain.TransferUsecase {
-	return &transferUsecase{repo: repo, fxServ: fxServ}
+func NewTransferUsecase(
+	repo domain.WalletRepository,
+	fxServ domain.ExchangeRateService,
+	auditDispatcher domain.AuditDispatcher,
+) domain.TransferUsecase {
+	return &transferUsecase{
+		repo:            repo,
+		fxServ:          fxServ,
+		auditDispatcher: auditDispatcher,
+	}
 }
 
 func (u *transferUsecase) ExecuteTransfer(ctx context.Context, idempotencyKey string, fromID, toID int64, amount int64) (*domain.Transfer, error) {
@@ -146,5 +155,9 @@ func (u *transferUsecase) ExecuteTransfer(ctx context.Context, idempotencyKey st
 		zap.Int64("target_amount", targetAmount),
 		zap.Float64("exchange_rate", rate),
 	)
+
+	// Dispatch event secara asinkron ke background audit worker
+	u.auditDispatcher.Dispatch(transfer)
+
 	return transfer, nil
 }

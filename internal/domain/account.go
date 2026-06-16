@@ -40,6 +40,10 @@ type ExchangeRateService interface {
 	GetRate(ctx context.Context, fromCurrency, toCurrency string) (float64, error)
 }
 
+type AuditDispatcher interface {
+	Dispatch(transfer *Transfer)
+}
+
 type WalletRepository interface {
 	GetByID(ctx context.Context, id int64) (*Account, error)
 	// Ambil data dengan Row-Level Locking untuk mencegah data balapan
